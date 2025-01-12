@@ -16,6 +16,9 @@ namespace daikin_s21 {
 static const char *const TAG = "daikin_s21.climate";
 
 void DaikinS21Climate::setup() {
+  this->current_temperature = NAN;
+  this->target_temperature = NAN;
+
   uint32_t h = this->get_object_id_hash();
   auto_setpoint_pref = global_preferences->make_preference<int16_t>(h + 1);
   cool_setpoint_pref = global_preferences->make_preference<int16_t>(h + 2);
@@ -197,7 +200,7 @@ bool DaikinS21Climate::should_check_setpoint(climate::ClimateMode mode) {
   bool min_passed =
       this->setpoint_interval == 0 || this->last_setpoint_check == 0 ||
       (millis() - this->last_setpoint_check > (this->setpoint_interval * 1000));
-  return mode_uses_setpoint & !skip_check && min_passed;
+  return mode_uses_setpoint && !skip_check && min_passed;
 }
 
 climate::ClimateMode DaikinS21Climate::d2e_climate_mode(
@@ -375,10 +378,13 @@ void DaikinS21Climate::update() {
       // the target temperature here if it appears uninitialized.
       float current_s21_sp = this->s21->get_setpoint();
       float unexpected_diff = abs(this->expected_s21_setpoint - current_s21_sp);
-      if (this->target_temperature == 0.0) {
+      if (this->target_temperature == 0.0 || std::isnan(this->target_temperature)) {
         // Use stored setpoint for mode, or fall back to use s21's setpoint.
         auto stored = this->load_setpoint(this->s21->get_climate_mode());
         this->target_temperature = stored.value_or(current_s21_sp);
+        ESP_LOGI(TAG, "S21 setpoint initialized");
+        ESP_LOGI(TAG, "  Found: %.1f", current_s21_sp);
+        ESP_LOGI(TAG, "  Target temp updated to %.1f", this->target_temperature);
         this->set_s21_climate();
       } else if (unexpected_diff >= SETPOINT_STEP) {
         // User probably set temp via IR remote -- so try to honor their wish by
@@ -396,6 +402,12 @@ void DaikinS21Climate::update() {
         ESP_LOGI(TAG, "S21 setpoint updated to %.1f",
                  this->expected_s21_setpoint);
       }
+    } else if(
+      mode == climate::CLIMATE_MODE_OFF ||
+      mode == climate::CLIMATE_MODE_DRY ||
+      mode == climate::CLIMATE_MODE_FAN_ONLY
+    ) {
+      this->target_temperature = NAN;
     }
 
     this->publish_state();
